@@ -1,0 +1,410 @@
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+    ConversationHandler,
+)
+
+# Configuration
+TOKEN = GANTI_DENGAN_TOKEN_BOT_KAMU
+ADMIN_CHAT_ID = 123456789  # Ganti dengan ID Telegram Admin (angka)
+
+# State untuk ConversationHandler User & Admin
+SELECT_PRODUCT, UPLOAD_PROOF = range(2)
+ADMIN_MAIN, EDIT_STOCK_INPUT, ADD_NAME, ADD_PRICE, ADD_STOCK = range(2, 7)
+
+# Penyimpanan ID Pengguna untuk Notifikasi Broadcast
+SUBSCRIBERS = set()
+
+# Data Produk  Layanan
+PRODUCTS = {
+    prod_1 {name Layanan Premium A, price 50000, stock 5},
+    prod_2 {name Layanan Premium B, price 100000, stock 0},
+}
+
+# Detail Pembayaran Manual
+PAYMENT_INFO = 
+💳 INFO PEMBAYARAN
+
+Silakan transfer sesuai nominal ke salah satu rekening berikut
+
+• BCA 1234567890 a.n. Toko Kamu
+• DANAOVOGoPay 08123456789 a.n. Toko Kamu
+
+⚠️ Pastikan nominal transfer sesuai dan upload bukti transfer dalam bentuk FOTO.
+
+
+logging.basicConfig(level=logging.INFO)
+
+# ==================== FITUR INFO STOK ====================
+
+async def show_stock_info()
+    Fungsi pembantu untuk merapikan tampilan info stok
+    text = 📦 INFORMASI STOK PRODUK REAL-TIMEnn
+    for code, data in PRODUCTS.items()
+        if data['stock']  0
+            stock_status = f{data['stock']} unit
+        else
+            stock_status = 🔴 HABIS
+            
+        text += f• {data['name']}n
+        text += f  💰 Harga Rp {data['price'],}n
+        text += f  📊 Stok {stock_status}nn
+    return text
+
+async def stok_command(update Update, context ContextTypes.DEFAULT_TYPE)
+    Command stok untuk cek stok langsung
+    stock_text = await show_stock_info()
+    await update.message.reply_text(stock_text, parse_mode=Markdown)
+
+async def stok_callback(update Update, context ContextTypes.DEFAULT_TYPE)
+    Callback tombol Cek Stok dari inline keyboard
+    query = update.callback_query
+    await query.answer()
+    stock_text = await show_stock_info()
+    
+    keyboard = [[InlineKeyboardButton(⬅️ Kembali ke Menu Order, callback_data=back_to_main)]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(text=stock_text, reply_markup=reply_markup, parse_mode=Markdown)
+
+# ==================== ALUR USER (PEMBELIAN) ====================
+
+async def start(update Update, context ContextTypes.DEFAULT_TYPE)
+    user_id = update.effective_user.id
+    SUBSCRIBERS.add(user_id)  # Mendaftarkan user untuk menerima notifikasi
+
+    keyboard = []
+    for code, data in PRODUCTS.items()
+        if data['stock']  0
+            status_text = fRp {data['price'],} (Stok {data['stock']})
+            callback_data = code
+        else
+            status_text = ❌ STOK HABIS
+            callback_data = out_of_stock
+            
+        keyboard.append([InlineKeyboardButton(f{data['name']} - {status_text}, callback_data=callback_data)])
+    
+    # Tombol Tambahan untuk Cek Stok
+    keyboard.append([InlineKeyboardButton(📦 Cek Semua Stok Produk, callback_data=check_stock_user)])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    msg_text = 👋 Selamat datang di Bot Auto Order!nnSilakan pilih produk yang ingin Anda beli
+    
+    if update.callback_query
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(msg_text, reply_markup=reply_markup)
+    else
+        await update.message.reply_text(msg_text, reply_markup=reply_markup)
+        
+    return SELECT_PRODUCT
+
+async def product_selected(update Update, context ContextTypes.DEFAULT_TYPE)
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == out_of_stock
+        await query.answer(⚠️ Maaf, stok produk ini sedang habis!, show_alert=True)
+        return SELECT_PRODUCT
+
+    product_code = query.data
+    product = PRODUCTS[product_code]
+    
+    if product['stock'] = 0
+        await query.answer(⚠️ Maaf, stok baru saja habis!, show_alert=True)
+        return SELECT_PRODUCT
+
+    context.user_data['order'] = {
+        'product_code' product_code,
+        'product_name' product['name'],
+        'price' product['price']
+    }
+
+    message_text = (
+        f🛍️ Detail Pesanann
+        fProduk {product['name']}n
+        fTotal Bayar Rp {product['price'],}nn
+        f{PAYMENT_INFO}n
+        f📸 Kirimkan foto bukti transfer Anda sekarang untuk memproses orderan
+    )
+
+    await query.edit_message_text(text=message_text, parse_mode=Markdown)
+    return UPLOAD_PROOF
+
+async def handle_proof(update Update, context ContextTypes.DEFAULT_TYPE)
+    user = update.message.from_user
+    photo = update.message.photo[-1]
+    order = context.user_data.get('order')
+
+    if not order
+        await update.message.reply_text(Terjadi kesalahan. Silakan ketik start untuk memulai kembali.)
+        return ConversationHandler.END
+
+    await update.message.reply_text(✅ Bukti transfer diterima! Pesanan Anda sedang diverifikasi oleh admin.)
+
+    keyboard = [
+        [
+            InlineKeyboardButton(✅ Terima & Potong Stok, callback_data=fapprove_{order['product_code']}_{user.id}),
+            InlineKeyboardButton(❌ Tolak, callback_data=freject_{order['product_code']}_{user.id})
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    caption_admin = (
+        f📩 ORDERAN BARU!nn
+        f👤 Pembeli {user.full_name} (@{user.username})n
+        f🆔 ID Pembeli `{user.id}`n
+        f📦 Produk {order['product_name']}n
+        f💰 Total Rp {order['price'],}n
+    )
+
+    await context.bot.send_photo(
+        chat_id=ADMIN_CHAT_ID,
+        photo=photo.file_id,
+        caption=caption_admin,
+        reply_markup=reply_markup,
+        parse_mode=Markdown
+    )
+
+    return ConversationHandler.END
+
+async def admin_action(update Update, context ContextTypes.DEFAULT_TYPE)
+    query = update.callback_query
+    await query.answer()
+
+    data_parts = query.data.split(_)
+    action = data_parts[0]
+    product_code = f{data_parts[1]}_{data_parts[2]}
+    user_id = int(data_parts[3])
+
+    if action == approve
+        if PRODUCTS[product_code]['stock']  0
+            PRODUCTS[product_code]['stock'] -= 1
+            sisa_stok = PRODUCTS[product_code]['stock']
+            
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=🎉 Pembayaran Terverifikasi!nnTerima kasih, pesanan Anda telah diproses.,
+                parse_mode=Markdown
+            )
+            await query.edit_message_caption(
+                caption=query.message.caption + fnn🟢 STATUS DIKONFIRMASI (Sisa Stok {sisa_stok}),
+                parse_mode=Markdown
+            )
+        else
+            await query.answer(❌ Gagal! Stok produk ini sudah 0habis., show_alert=True)
+
+    elif action == reject
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=❌ Pembayaran Ditolak!nnBukti transfer Anda tidak valid. Silakan start ulang atau hubungi admin.,
+            parse_mode=Markdown
+        )
+        await query.edit_message_caption(
+            caption=query.message.caption + nn🔴 STATUS DITOLAK,
+            parse_mode=Markdown
+        )
+
+# ==================== ALUR ADMIN (STOK & TAMBAH BARANG) ====================
+
+async def admin_panel(update Update, context ContextTypes.DEFAULT_TYPE)
+    user_id = update.message.from_user.id
+    if user_id != ADMIN_CHAT_ID
+        await update.message.reply_text(⛔ Anda tidak memiliki akses ke menu ini.)
+        return ConversationHandler.END
+
+    keyboard = [
+        [InlineKeyboardButton(✏️ Edit Stok Produk, callback_data=admin_menu_edit)],
+        [InlineKeyboardButton(➕ Tambah Produk Baru, callback_data=admin_menu_add)],
+        [InlineKeyboardButton(📊 Cek Semua Stok, callback_data=check_stock_user)]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        🛠️ PANEL ADMINnnSilakan pilih menu kelola barang di bawah ini,
+        reply_markup=reply_markup,
+        parse_mode=Markdown
+    )
+    return ADMIN_MAIN
+
+async def admin_menu_choice(update Update, context ContextTypes.DEFAULT_TYPE)
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == admin_menu_edit
+        keyboard = []
+        for code, data in PRODUCTS.items()
+            btn_text = fEdit {data['name']} (Stok {data['stock']})
+            keyboard.append([InlineKeyboardButton(btn_text, callback_data=feditstock_{code})])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            📝 Pilih produk yang ingin diubah jumlah stoknya,
+            reply_markup=reply_markup
+        )
+        return EDIT_STOCK_INPUT
+
+    elif query.data == admin_menu_add
+        await query.edit_message_text(➕ TAMBAH PRODUK BARUnnKetik nama produk baru (Contoh `Netflix 1 Bulan`), parse_mode=Markdown)
+        return ADD_NAME
+
+async def select_product_to_edit(update Update, context ContextTypes.DEFAULT_TYPE)
+    query = update.callback_query
+    await query.answer()
+
+    product_code = query.data.replace(editstock_, )
+    context.user_data['edit_prod_code'] = product_code
+    product = PRODUCTS[product_code]
+
+    await query.edit_message_text(
+        f📝 Edit Stok {product['name']}n
+        fStok saat ini {product['stock']}nn
+        fKetik angka jumlah stok baru yang diinginkan (Contoh `15`),
+        parse_mode=Markdown
+    )
+    return EDIT_STOCK_INPUT
+
+async def save_new_stock(update Update, context ContextTypes.DEFAULT_TYPE)
+    text = update.message.text
+    if not text.isdigit()
+        await update.message.reply_text(⚠️ Harap masukkan angka bulat yang valid (Contoh 15). Coba lagi)
+        return EDIT_STOCK_INPUT
+
+    new_stock = int(text)
+    product_code = context.user_data.get('edit_prod_code')
+
+    if product_code in PRODUCTS
+        PRODUCTS[product_code]['stock'] = new_stock
+        prod_name = PRODUCTS[product_code]['name']
+        await update.message.reply_text(
+            f✅ Berhasil! Stok {prod_name} diperbarui menjadi {new_stock}.nnKetik admin untuk kembali.,
+            parse_mode=Markdown
+        )
+
+    return ConversationHandler.END
+
+# --- PROSES TAMBAH PRODUK BARU + NOTIFIKASI AUTO BROADCAST ---
+
+async def add_product_name(update Update, context ContextTypes.DEFAULT_TYPE)
+    context.user_data['new_name'] = update.message.text
+    await update.message.reply_text(💰 Masukkan HARGA produk (angka saja, Contoh `35000`), parse_mode=Markdown)
+    return ADD_PRICE
+
+async def add_product_price(update Update, context ContextTypes.DEFAULT_TYPE)
+    text = update.message.text
+    if not text.isdigit()
+        await update.message.reply_text(⚠️ Harap masukkan nominal harga berupa angka saja. Coba lagi)
+        return ADD_PRICE
+
+    context.user_data['new_price'] = int(text)
+    await update.message.reply_text(📊 Masukkan STOK AWAL produk (angka saja, Contoh `10`), parse_mode=Markdown)
+    return ADD_STOCK
+
+async def add_product_stock(update Update, context ContextTypes.DEFAULT_TYPE)
+    text = update.message.text
+    if not text.isdigit()
+        await update.message.reply_text(⚠️ Harap masukkan jumlah stok berupa angka saja. Coba lagi)
+        return ADD_STOCK
+
+    new_stock = int(text)
+    prod_name = context.user_data['new_name']
+    prod_price = context.user_data['new_price']
+
+    # Buat ID Produk Baru
+    new_code = fprod_{len(PRODUCTS) + 1}
+    PRODUCTS[new_code] = {
+        name prod_name,
+        price prod_price,
+        stock new_stock
+    }
+
+    await update.message.reply_text(
+        f✅ PRODUK BERHASIL DITAMBAHKAN!nn
+        f📦 Nama {prod_name}n
+        f💰 Harga Rp {prod_price,}n
+        f📊 Stok {new_stock}nn
+        f📢 Mengirim notifikasi otomatis ke pelanggan...,
+        parse_mode=Markdown
+    )
+
+    # BROADCAST NOTIFIKASI KE SEMUA USER
+    broadcast_msg = (
+        f📢 PRODUK BARU DITAMBAHKAN!nn
+        f📦 {prod_name}n
+        f💰 Harga Rp {prod_price,}n
+        f📊 Stok Tersedia {new_stock} unitnn
+        f🛒 Ketik start sekarang untuk melakukan pemesanan!
+    )
+
+    count_notif = 0
+    for uid in SUBSCRIBERS
+        if uid != ADMIN_CHAT_ID
+            try
+                await context.bot.send_message(chat_id=uid, text=broadcast_msg, parse_mode=Markdown)
+                count_notif += 1
+            except Exception
+                pass  # Mengabaikan jika user telah memblokir bot
+
+    await update.message.reply_text(f🚀 Notifikasi berhasil terkirim ke {count_notif} pengguna aktif!)
+    return ConversationHandler.END
+
+async def cancel(update Update, context ContextTypes.DEFAULT_TYPE)
+    await update.message.reply_text(Proses dibatalkan.)
+    return ConversationHandler.END
+
+# ==================== MAIN PROGRAM ====================
+
+def main()
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    # Handler Command stok
+    app.add_handler(CommandHandler(stok, stok_command))
+
+    # Conversation Handler User (Order)
+    user_conv = ConversationHandler(
+        entry_points=[
+            CommandHandler(start, start),
+            CallbackQueryHandler(start, pattern=^back_to_main$)
+        ],
+        states={
+            SELECT_PRODUCT [
+                CallbackQueryHandler(product_selected, pattern=^(prod_out_of_stock)),
+                CallbackQueryHandler(stok_callback, pattern=^check_stock_user$)
+            ],
+            UPLOAD_PROOF [MessageHandler(filters.PHOTO, handle_proof)],
+        },
+        fallbacks=[CommandHandler(cancel, cancel)],
+    )s
+
+    # Conversation Handler Admin
+    admin_conv = ConversationHandler(
+        entry_points=[CommandHandler(admin, admin_panel)],
+        states={
+            ADMIN_MAIN [CallbackQueryHandler(admin_menu_choice, pattern=^admin_menu_)],
+            EDIT_STOCK_INPUT [
+                CallbackQueryHandler(select_product_to_edit, pattern=^editstock_),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, save_new_stock)
+            ],
+            ADD_NAME [MessageHandler(filters.TEXT & ~filters.COMMAND, add_product_name)],
+            ADD_PRICE [MessageHandler(filters.TEXT & ~filters.COMMAND, add_product_price)],
+            ADD_STOCK [MessageHandler(filters.TEXT & ~filters.COMMAND, add_product_stock)],
+        },
+        fallbacks=[CommandHandler(cancel, cancel)],
+    )
+
+    app.add_handler(user_conv)
+    app.add_handler(admin_conv)
+    app.add_handler(CallbackQueryHandler(stok_callback, pattern=^check_stock_user$))
+    app.add_handler(CallbackQueryHandler(admin_action, pattern=^(approvereject)_))
+
+    print(Bot berjalan...)
+    app.run_polling()
+
+if __name__ == __main__
+    main()
